@@ -74,6 +74,23 @@
             border: 2px solid #fff;
         }
 
+        #powerupStatus {
+            position: absolute;
+            top: 80px;
+            left: 20px;
+            background: rgba(128, 0, 128, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 10px;
+            border: 2px solid #fff;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        #powerupStatus.visible {
+            opacity: 1;
+        }
+
         #startScreen {
             position: absolute;
             min-width: 100%;
@@ -216,9 +233,11 @@
         <div id="highScore">Best: 0</div>
     </div>
 
+    <div id="powerupStatus">No Active Powerup</div>
+
     <div id="startScreen">
         <div id="gameTitle">CROSSY ROAD</div>
-        <div id="gameSubtitle">Cross the road safely!<br>Avoid cars & trucks, collect coins!</div>
+        <div id="gameSubtitle">Cross the road safely!<br>Avoid cars & trucks, collect coins & powerups!</div>
         <button id="startButton" class="game-button">START GAME</button>
     </div>
 
@@ -239,7 +258,7 @@
 
     <div class="instructions">
         <div>Use Arrow Keys or Buttons to Move</div>
-        <div>Avoid Cars & Trucks • Collect Coins • Beat Your High Score!</div>
+        <div>Avoid Cars & Trucks • Collect Coins & Powerups • Beat Your High Score!</div>
     </div>
 
     <script>
@@ -250,7 +269,15 @@
             speed: 1,
             coinsCollected: 0,
             isPlaying: false,
-            gameStarted: false
+            gameStarted: false,
+            // Powerup states
+            activePowerup: null,
+            powerupEndTime: 0,
+            invulnerable: false,
+            slowMotion: false,
+            magnetActive: false,
+            jumpBoostActive: false,
+            scoreMultiplier: 1
         };
 
         // DOM elements
@@ -263,6 +290,7 @@
         const hudDOM = document.getElementById("hud");
         const controlsDOM = document.getElementById("controls");
         const instructionsDOM = document.querySelector(".instructions");
+        const powerupStatusDOM = document.getElementById("powerupStatus");
 
         // Enhanced scene setup with better performance
         const scene = new THREE.Scene();
@@ -302,13 +330,49 @@
         let moves = [];
         let stepStartTimestamp = null;
         let coins = [];
+        let powerups = [];
 
         // Performance optimization: Object pooling
         const objectPools = {
             cars: [],
             trucks: [],
             trees: [],
-            coins: []
+            coins: [],
+            powerups: []
+        };
+
+        // Powerup types configuration
+        const powerupTypes = {
+            SHIELD: {
+                color: 0x00ff00,
+                duration: 8000,
+                name: "Shield",
+                description: "Invulnerable to collisions"
+            },
+            SLOW_MOTION: {
+                color: 0x0088ff,
+                duration: 6000,
+                name: "Slow Motion",
+                description: "Slows down all vehicles"
+            },
+            COIN_MAGNET: {
+                color: 0xffd700,
+                duration: 10000,
+                name: "Coin Magnet",
+                description: "Attracts nearby coins"
+            },
+            JUMP_BOOST: {
+                color: 0xff8800,
+                duration: 5000,
+                name: "Jump Boost",
+                description: "Higher and faster jumps"
+            },
+            SCORE_MULTIPLIER: {
+                color: 0xff00ff,
+                duration: 12000,
+                name: "Score x2",
+                description: "Double points for everything"
+            }
         };
 
         // Enhanced textures with better performance
@@ -375,6 +439,119 @@
             if (laneIndex < 15) return 0.45; // 45% safe lanes mid game
             if (laneIndex < 30) return 0.3; // 30% safe lanes late game
             return 0.2; // 20% safe lanes very late game
+        }
+
+        // Powerup system functions
+        function createPowerup(type) {
+            const powerup = new THREE.Group();
+            const config = powerupTypes[type];
+            
+            // Main powerup body (cube)
+            const body = new THREE.Mesh(
+                new THREE.BoxBufferGeometry(12 * zoom, 12 * zoom, 12 * zoom),
+                new THREE.MeshPhongMaterial({ 
+                    color: config.color,
+                    emissive: config.color,
+                    emissiveIntensity: 0.2,
+                    transparent: true,
+                    opacity: 0.9
+                })
+            );
+            body.position.z = 18 * zoom;
+            body.castShadow = true;
+            powerup.add(body);
+
+            // Glowing effect
+            const glow = new THREE.Mesh(
+                new THREE.BoxBufferGeometry(16 * zoom, 16 * zoom, 16 * zoom),
+                new THREE.MeshBasicMaterial({ 
+                    color: config.color,
+                    transparent: true,
+                    opacity: 0.3
+                })
+            );
+            glow.position.z = 18 * zoom;
+            powerup.add(glow);
+
+            powerup.userData = { 
+                type: type,
+                rotationSpeed: 0.05,
+                bobSpeed: 0.003,
+                baseY: 18 * zoom
+            };
+            
+            return powerup;
+        }
+
+        function activatePowerup(type, timestamp) {
+            const config = powerupTypes[type];
+            gameState.activePowerup = type;
+            gameState.powerupEndTime = timestamp + config.duration;
+
+            // Apply powerup effects
+            switch(type) {
+                case 'SHIELD':
+                    gameState.invulnerable = true;
+                    chicken.material = chicken.children[0].material.clone();
+                    chicken.children[0].material.emissive = new THREE.Color(0x00ff00);
+                    chicken.children[0].material.emissiveIntensity = 0.3;
+                    break;
+                case 'SLOW_MOTION':
+                    gameState.slowMotion = true;
+                    break;
+                case 'COIN_MAGNET':
+                    gameState.magnetActive = true;
+                    break;
+                case 'JUMP_BOOST':
+                    gameState.jumpBoostActive = true;
+                    break;
+                case 'SCORE_MULTIPLIER':
+                    gameState.scoreMultiplier = 2;
+                    break;
+            }
+
+            updatePowerupStatus();
+        }
+
+        function deactivatePowerup() {
+            const type = gameState.activePowerup;
+            
+            // Remove powerup effects
+            switch(type) {
+                case 'SHIELD':
+                    gameState.invulnerable = false;
+                    chicken.children[0].material.emissive = new THREE.Color(0x000000);
+                    chicken.children[0].material.emissiveIntensity = 0;
+                    break;
+                case 'SLOW_MOTION':
+                    gameState.slowMotion = false;
+                    break;
+                case 'COIN_MAGNET':
+                    gameState.magnetActive = false;
+                    break;
+                case 'JUMP_BOOST':
+                    gameState.jumpBoostActive = false;
+                    break;
+                case 'SCORE_MULTIPLIER':
+                    gameState.scoreMultiplier = 1;
+                    break;
+            }
+
+            gameState.activePowerup = null;
+            gameState.powerupEndTime = 0;
+            updatePowerupStatus();
+        }
+
+        function updatePowerupStatus() {
+            if (gameState.activePowerup) {
+                const config = powerupTypes[gameState.activePowerup];
+                const timeLeft = Math.max(0, (gameState.powerupEndTime - Date.now()) / 1000);
+                powerupStatusDOM.textContent = `${config.name}: ${timeLeft.toFixed(1)}s`;
+                powerupStatusDOM.classList.add('visible');
+            } else {
+                powerupStatusDOM.textContent = "No Active Powerup";
+                powerupStatusDOM.classList.remove('visible');
+            }
         }
 
         // Enhanced Chicken with better design
@@ -519,6 +696,23 @@
                         lane.mesh.add(coin);
                         coins.push({ coin, lane: index, column: coinPosition });
                     }
+                    
+                    // Add powerups (15% chance in safe fields)
+                    if (index > 0 && Math.random() < 0.15) {
+                        const powerupTypeKeys = Object.keys(powerupTypes);
+                        const randomType = powerupTypeKeys[Math.floor(Math.random() * powerupTypeKeys.length)];
+                        const powerup = createPowerup(randomType);
+                        let powerupPosition;
+                        let attempts = 0;
+                        do {
+                            powerupPosition = Math.floor(Math.random() * columns);
+                            attempts++;
+                        } while (attempts < 10 && coins.some(c => c.lane === index && c.column === powerupPosition));
+                        
+                        powerup.position.x = (powerupPosition * positionWidth + positionWidth / 2) * zoom - (boardWidth * zoom) / 2;
+                        lane.mesh.add(powerup);
+                        powerups.push({ powerup, lane: index, column: powerupPosition });
+                    }
                     break;
 
                 case "forest":
@@ -539,6 +733,26 @@
                             coin.position.x = (coinPosition * positionWidth + positionWidth / 2) * zoom - (boardWidth * zoom) / 2;
                             lane.mesh.add(coin);
                             coins.push({ coin, lane: index, column: coinPosition });
+                        }
+                    }
+                    
+                    // Add powerups to forests (10% chance)
+                    if (index > 0 && Math.random() < 0.1) {
+                        const powerupTypeKeys = Object.keys(powerupTypes);
+                        const randomType = powerupTypeKeys[Math.floor(Math.random() * powerupTypeKeys.length)];
+                        const powerup = createPowerup(randomType);
+                        let powerupPosition;
+                        let attempts = 0;
+                        do {
+                            powerupPosition = Math.floor(Math.random() * columns);
+                            attempts++;
+                        } while ((lane.occupiedPositions.has(powerupPosition) || 
+                                coins.some(c => c.lane === index && c.column === powerupPosition)) && attempts < 10);
+                        
+                        if (!lane.occupiedPositions.has(powerupPosition)) {
+                            powerup.position.x = (powerupPosition * positionWidth + positionWidth / 2) * zoom - (boardWidth * zoom) / 2;
+                            lane.mesh.add(powerup);
+                            powerups.push({ powerup, lane: index, column: powerupPosition });
                         }
                     }
                     break;
@@ -759,6 +973,15 @@
             gameState.isPlaying = true;
             gameState.gameStarted = true;
             
+            // Reset powerup states
+            gameState.activePowerup = null;
+            gameState.powerupEndTime = 0;
+            gameState.invulnerable = false;
+            gameState.slowMotion = false;
+            gameState.magnetActive = false;
+            gameState.jumpBoostActive = false;
+            gameState.scoreMultiplier = 1;
+            
             // Reset position variables
             currentLane = 0;
             currentColumn = Math.floor(columns / 2);
@@ -767,6 +990,7 @@
             moves = [];
             stepStartTimestamp = null;
             coins = [];
+            powerups = [];
 
             // Generate initial lanes with better distribution
             lanes = [];
@@ -777,8 +1001,11 @@
                 if (i >= 0) lanes.push(lane);
             }
 
-            // Reset chicken position
+            // Reset chicken position and appearance
             chicken.position.set(0, 0, 0);
+            chicken.children[0].material.emissive = new THREE.Color(0x000000);
+            chicken.children[0].material.emissiveIntensity = 0;
+            
             camera.position.set(initialCameraPositionX, initialCameraPositionY, distance);
             directionalLight.position.set(-100, -100, 200);
 
@@ -788,6 +1015,7 @@
             instructionsDOM.classList.add('visible');
 
             updateHUD();
+            updatePowerupStatus();
         }
 
         // Create chicken
@@ -813,7 +1041,7 @@
             highScoreDOM.textContent = `Best: ${gameState.highScore}`;
         }
 
-        // Enhanced movement function
+        // Enhanced movement function with jump boost
         function move(direction) {
             if (!gameState.isPlaying) return;
 
@@ -861,53 +1089,99 @@
             lanes.push(lane);
         }
 
-        // Enhanced collision detection
+        // Enhanced collision detection with shield protection
         function checkCollisions() {
             const currentLaneObj = lanes[currentLane];
             if (!currentLaneObj) return;
 
-            // Vehicle collision
+            // Vehicle collision (with shield protection)
             if (currentLaneObj.type === "car" || currentLaneObj.type === "truck") {
-                const chickenMinX = chicken.position.x - (chickenSize * zoom) / 2;
-                const chickenMaxX = chicken.position.x + (chickenSize * zoom) / 2;
-                const vehicleLength = currentLaneObj.type === "car" ? 60 : 105;
+                if (!gameState.invulnerable) {
+                    const chickenMinX = chicken.position.x - (chickenSize * zoom) / 2;
+                    const chickenMaxX = chicken.position.x + (chickenSize * zoom) / 2;
+                    const vehicleLength = currentLaneObj.type === "car" ? 60 : 105;
 
-                currentLaneObj.vehicles.forEach(vehicle => {
-                    const vehicleMinX = vehicle.position.x - (vehicleLength * zoom) / 2;
-                    const vehicleMaxX = vehicle.position.x + (vehicleLength * zoom) / 2;
+                    currentLaneObj.vehicles.forEach(vehicle => {
+                        const vehicleMinX = vehicle.position.x - (vehicleLength * zoom) / 2;
+                        const vehicleMaxX = vehicle.position.x + (vehicleLength * zoom) / 2;
 
-                    if (chickenMaxX > vehicleMinX && chickenMinX < vehicleMaxX) {
-                        gameOver();
-                    }
-                });
+                        if (chickenMaxX > vehicleMinX && chickenMinX < vehicleMaxX) {
+                            gameOver();
+                        }
+                    });
+                }
             }
 
-            // Coin collection
+            // Coin collection with magnet effect
             coins.forEach((coinData, index) => {
                 if (coinData.lane === currentLane) {
                     const chickenMinX = chicken.position.x - (chickenSize * zoom) / 2;
                     const chickenMaxX = chicken.position.x + (chickenSize * zoom) / 2;
                     const coinX = coinData.coin.position.x;
                     
-                    if (chickenMaxX > coinX - 10 * zoom && chickenMinX < coinX + 10 * zoom) {
+                    let collectDistance = 10 * zoom;
+                    if (gameState.magnetActive) {
+                        collectDistance = 30 * zoom; // Larger collection radius with magnet
+                    }
+                    
+                    if (chickenMaxX > coinX - collectDistance && chickenMinX < coinX + collectDistance) {
                         collectCoin(index, coinData);
+                    }
+                }
+            });
+
+            // Powerup collection
+            powerups.forEach((powerupData, index) => {
+                if (powerupData.lane === currentLane) {
+                    const chickenMinX = chicken.position.x - (chickenSize * zoom) / 2;
+                    const chickenMaxX = chicken.position.x + (chickenSize * zoom) / 2;
+                    const powerupX = powerupData.powerup.position.x;
+                    
+                    if (chickenMaxX > powerupX - 15 * zoom && chickenMinX < powerupX + 15 * zoom) {
+                        collectPowerup(index, powerupData);
                     }
                 }
             });
         }
 
-        // Enhanced coin collection
+        // Enhanced coin collection with score multiplier
         function collectCoin(index, coinData) {
             coinData.coin.parent.remove(coinData.coin);
             coins.splice(index, 1);
             gameState.coinsCollected++;
-            gameState.score += 10; // Bonus points for coins
+            const coinPoints = 10 * gameState.scoreMultiplier;
+            gameState.score += coinPoints;
+            updateHUD();
+        }
+
+        // Powerup collection function
+        function collectPowerup(index, powerupData) {
+            powerupData.powerup.parent.remove(powerupData.powerup);
+            const powerupType = powerupData.powerup.userData.type;
+            powerups.splice(index, 1);
+            
+            // Deactivate current powerup if any
+            if (gameState.activePowerup) {
+                deactivatePowerup();
+            }
+            
+            // Activate new powerup
+            activatePowerup(powerupType, Date.now());
+            
+            // Bonus points for collecting powerup
+            const powerupPoints = 25 * gameState.scoreMultiplier;
+            gameState.score += powerupPoints;
             updateHUD();
         }
 
         // Enhanced game over function
         function gameOver() {
             gameState.isPlaying = false;
+            
+            // Deactivate any active powerup
+            if (gameState.activePowerup) {
+                deactivatePowerup();
+            }
             
             if (gameState.score > gameState.highScore) {
                 gameState.highScore = gameState.score;
@@ -930,7 +1204,7 @@
             initializeGame();
         }
 
-        // Enhanced animation loop
+        // Enhanced animation loop with powerup animations
         function animate(timestamp) {
             requestAnimationFrame(animate);
 
@@ -948,21 +1222,33 @@
                 return;
             }
 
-            // Animate vehicles
+            // Check for powerup expiration
+            if (gameState.activePowerup && Date.now() > gameState.powerupEndTime) {
+                deactivatePowerup();
+            }
+
+            // Update powerup status display
+            if (gameState.activePowerup) {
+                updatePowerupStatus();
+            }
+
+            // Animate vehicles with slow motion effect
             lanes.forEach(lane => {
                 if (lane.type === "car" || lane.type === "truck") {
                     const boundaryLeft = (-boardWidth * zoom) / 2 - positionWidth * 2 * zoom;
                     const boundaryRight = (boardWidth * zoom) / 2 + positionWidth * 2 * zoom;
+                    
+                    const speedMultiplier = gameState.slowMotion ? 0.3 : 1;
 
                     lane.vehicles.forEach(vehicle => {
                         if (lane.direction) {
                             vehicle.position.x = vehicle.position.x < boundaryLeft 
                                 ? boundaryRight 
-                                : vehicle.position.x - (lane.speed / 16) * delta;
+                                : vehicle.position.x - (lane.speed / 16) * delta * speedMultiplier;
                         } else {
                             vehicle.position.x = vehicle.position.x > boundaryRight 
                                 ? boundaryLeft 
-                                : vehicle.position.x + (lane.speed / 16) * delta;
+                                : vehicle.position.x + (lane.speed / 16) * delta * speedMultiplier;
                         }
                     });
                 }
@@ -973,16 +1259,34 @@
                 coinData.coin.rotation.z += coinData.coin.userData.rotationSpeed;
             });
 
-            // Handle player movement
+            // Animate powerups with rotation and bobbing
+            powerups.forEach(powerupData => {
+                const powerup = powerupData.powerup;
+                powerup.rotation.x += powerup.userData.rotationSpeed;
+                powerup.rotation.y += powerup.userData.rotationSpeed * 0.7;
+                powerup.rotation.z += powerup.userData.rotationSpeed * 0.5;
+                
+                // Bobbing effect
+                const bobOffset = Math.sin(timestamp * powerup.userData.bobSpeed) * 3 * zoom;
+                powerup.position.z = powerup.userData.baseY + bobOffset;
+                
+                // Pulsing glow effect
+                const glowIntensity = 0.3 + Math.sin(timestamp * 0.005) * 0.2;
+                powerup.children[1].material.opacity = glowIntensity;
+            });
+
+            // Handle player movement with jump boost
             if (startMoving) {
                 stepStartTimestamp = timestamp;
                 startMoving = false;
             }
 
             if (stepStartTimestamp) {
+                const currentStepTime = gameState.jumpBoostActive ? stepTime * 0.7 : stepTime;
                 const moveDeltaTime = timestamp - stepStartTimestamp;
-                const moveDeltaDistance = Math.min(moveDeltaTime / stepTime, 1) * positionWidth * zoom;
-                const jumpDeltaDistance = Math.sin(Math.min(moveDeltaTime / stepTime, 1) * Math.PI) * 8 * zoom;
+                const moveDeltaDistance = Math.min(moveDeltaTime / currentStepTime, 1) * positionWidth * zoom;
+                const jumpHeight = gameState.jumpBoostActive ? 12 : 8;
+                const jumpDeltaDistance = Math.sin(Math.min(moveDeltaTime / currentStepTime, 1) * Math.PI) * jumpHeight * zoom;
 
                 switch (moves[0]) {
                     case "forward":
@@ -1019,11 +1323,12 @@
                 }
 
                 // Movement completion
-                if (moveDeltaTime > stepTime) {
+                if (moveDeltaTime > currentStepTime) {
                     switch (moves[0]) {
                         case "forward":
                             currentLane++;
-                            gameState.score = Math.max(gameState.score, currentLane);
+                            const lanePoints = 1 * gameState.scoreMultiplier;
+                            gameState.score = Math.max(gameState.score, currentLane * lanePoints);
                             gameState.speed = 1 + (currentLane * 0.02); // Gradual speed increase
                             break;
                         case "backward":
